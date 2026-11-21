@@ -32,6 +32,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -485,35 +487,71 @@ class SanitizeControllerTest {
     @DisplayName("Encrypted PDF Tests")
     class EncryptedPdfTests {
 
-        @Test
-        @DisplayName("Should sanitize a PDF encrypted without an open password")
-        void testEncryptedWithoutOpenPassword() throws Exception {
-            byte[] encryptedBytes = createPdfEncryptedWithoutOpenPassword(256);
-            MockMultipartFile pdfFile =
+        private SanitizePdfRequest requestFor(byte[] pdfBytes, boolean allOptions) {
+            SanitizePdfRequest request = new SanitizePdfRequest();
+            request.setFileInput(
                     new MockMultipartFile(
                             "fileInput",
                             "encrypted.pdf",
                             MediaType.APPLICATION_PDF_VALUE,
-                            encryptedBytes);
+                            pdfBytes));
+            request.setRemoveJavaScript(allOptions);
+            request.setRemoveEmbeddedFiles(allOptions);
+            request.setRemoveXMPMetadata(allOptions);
+            request.setRemoveMetadata(allOptions);
+            request.setRemoveLinks(allOptions);
+            request.setRemoveFonts(allOptions);
+            return request;
+        }
 
-            SanitizePdfRequest request = new SanitizePdfRequest();
-            request.setFileInput(pdfFile);
-            request.setRemoveJavaScript(true);
-            request.setRemoveEmbeddedFiles(false);
-            request.setRemoveXMPMetadata(false);
-            request.setRemoveMetadata(false);
-            request.setRemoveLinks(false);
-            request.setRemoveFonts(false);
-
+        private PDDocument sanitize(byte[] pdfBytes, boolean allOptions) throws Exception {
             when(pdfDocumentFactory.load(any(MultipartFile.class), anyBoolean()))
-                    .thenAnswer(inv -> Loader.loadPDF(encryptedBytes));
-
-            ResponseEntity<Resource> response = sanitizeController.sanitizePDF(request);
-
+                    .thenAnswer(inv -> Loader.loadPDF(pdfBytes));
+            ResponseEntity<Resource> response =
+                    sanitizeController.sanitizePDF(requestFor(pdfBytes, allOptions));
             assertEquals(HttpStatus.OK, response.getStatusCode());
-            try (PDDocument result = Loader.loadPDF(drainBody(response))) {
+            return Loader.loadPDF(drainBody(response));
+        }
+
+        @ParameterizedTest(name = "key length {0}")
+        @ValueSource(ints = {40, 128, 256})
+        @DisplayName("Should sanitize a PDF encrypted without an open password")
+        void testEncryptedWithoutOpenPassword(int keyLength) throws Exception {
+            byte[] encryptedBytes = createPdfEncryptedWithoutOpenPassword(keyLength);
+
+            try (PDDocument result = sanitize(encryptedBytes, false)) {
                 assertFalse(result.isEncrypted());
                 assertEquals(1, result.getNumberOfPages());
+            }
+        }
+
+        @Test
+        @DisplayName("Should sanitize an encrypted PDF with every option enabled")
+        void testEncryptedWithAllOptions() throws Exception {
+            byte[] encryptedBytes = createPdfEncryptedWithoutOpenPassword(256);
+
+            try (PDDocument result = sanitize(encryptedBytes, true)) {
+                assertFalse(result.isEncrypted());
+                assertEquals(1, result.getNumberOfPages());
+            }
+        }
+
+        @Test
+        @DisplayName("Should keep the page content of an encrypted PDF readable")
+        void testEncryptedContentPreserved() throws Exception {
+            byte[] encryptedBytes = createPdfEncryptedWithoutOpenPassword(256);
+
+            try (PDDocument result = sanitize(encryptedBytes, false)) {
+                String text = new org.apache.pdfbox.text.PDFTextStripper().getText(result);
+                assertTrue(text.contains("Test content"));
+            }
+        }
+
+        @Test
+        @DisplayName("Should leave an unencrypted PDF unencrypted")
+        void testUnencryptedStaysUnencrypted() throws Exception {
+            try (PDDocument result = sanitize(simplePdfBytes, false)) {
+                assertFalse(result.isEncrypted());
             }
         }
     }
