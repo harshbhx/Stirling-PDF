@@ -18,6 +18,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
@@ -142,6 +144,29 @@ class SanitizeControllerTest {
             info.setAuthor("Secret Author");
             info.setSubject("Secret Subject");
             doc.setDocumentInformation(info);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            doc.save(baos);
+            return baos.toByteArray();
+        }
+    }
+
+    private byte[] createPdfEncryptedWithoutOpenPassword(int keyLength) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(100, 700);
+                cs.showText("Test content");
+                cs.endText();
+            }
+            AccessPermission permissions = new AccessPermission();
+            permissions.setCanPrint(false);
+            StandardProtectionPolicy policy =
+                    new StandardProtectionPolicy("owner-secret", "", permissions);
+            policy.setEncryptionKeyLength(keyLength);
+            doc.protect(policy);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             doc.save(baos);
             return baos.toByteArray();
@@ -453,6 +478,43 @@ class SanitizeControllerTest {
             ResponseEntity<Resource> response = sanitizeController.sanitizePDF(request);
             assertNotNull(response);
             assertEquals(HttpStatus.OK, response.getStatusCode());
+        }
+    }
+
+    @Nested
+    @DisplayName("Encrypted PDF Tests")
+    class EncryptedPdfTests {
+
+        @Test
+        @DisplayName("Should sanitize a PDF encrypted without an open password")
+        void testEncryptedWithoutOpenPassword() throws Exception {
+            byte[] encryptedBytes = createPdfEncryptedWithoutOpenPassword(256);
+            MockMultipartFile pdfFile =
+                    new MockMultipartFile(
+                            "fileInput",
+                            "encrypted.pdf",
+                            MediaType.APPLICATION_PDF_VALUE,
+                            encryptedBytes);
+
+            SanitizePdfRequest request = new SanitizePdfRequest();
+            request.setFileInput(pdfFile);
+            request.setRemoveJavaScript(true);
+            request.setRemoveEmbeddedFiles(false);
+            request.setRemoveXMPMetadata(false);
+            request.setRemoveMetadata(false);
+            request.setRemoveLinks(false);
+            request.setRemoveFonts(false);
+
+            when(pdfDocumentFactory.load(any(MultipartFile.class), anyBoolean()))
+                    .thenAnswer(inv -> Loader.loadPDF(encryptedBytes));
+
+            ResponseEntity<Resource> response = sanitizeController.sanitizePDF(request);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            try (PDDocument result = Loader.loadPDF(drainBody(response))) {
+                assertFalse(result.isEncrypted());
+                assertEquals(1, result.getNumberOfPages());
+            }
         }
     }
 }
