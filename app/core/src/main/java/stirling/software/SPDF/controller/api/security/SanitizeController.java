@@ -77,6 +77,8 @@ public class SanitizeController {
         boolean removeFonts = Boolean.TRUE.equals(request.getRemoveFonts());
 
         try (PDDocument document = pdfDocumentFactory.load(inputFile, true)) {
+            removeEncryption(document);
+
             if (removeJavaScript) {
                 sanitizeJavaScript(document);
             }
@@ -105,6 +107,16 @@ public class SanitizeController {
                     document,
                     GeneralUtils.generateFilename(inputFile.getOriginalFilename(), ".pdf"),
                     tempFileManager);
+        }
+    }
+
+    /**
+     * The document was opened without a password, so any encryption left on it is permissions-only
+     * and PDFBox refuses to save it without being told what to do with it.
+     */
+    private static void removeEncryption(PDDocument document) {
+        if (document.isEncrypted()) {
+            document.setAllSecurityToBeRemoved(true);
         }
     }
 
