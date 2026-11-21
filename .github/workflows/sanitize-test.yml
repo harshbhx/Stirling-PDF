@@ -13,13 +13,17 @@ jobs:
           distribution: temurin
           java-version: "25"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Spotless
-        run: ./gradlew spotlessCheck --console=plain
-        continue-on-error: true
+      - name: Spotless apply
+        run: |
+          ./gradlew :stirling-pdf:spotlessJavaApply --console=plain
+          git diff -- app > spotless.diff || true
+          git diff --stat
       - name: Test
         run: ./gradlew :stirling-pdf:test --tests '*SanitizeControllerTest*' --console=plain
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-report
-          path: app/core/build/reports/tests/test
+          path: |
+            app/core/build/reports/tests/test
+            spotless.diff
